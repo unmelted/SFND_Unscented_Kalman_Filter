@@ -17,7 +17,16 @@ class UKF {
   virtual ~UKF();
 
     void InitializeLidarMatrices(MeasurementPackage measurement)
-        void InitializeRadarMatrices(MeasurementPackage measurement);
+    void InitializeRadarMatrices(MeasurementPackage measurement);
+    void PredictMean();
+    void PredictCovariance();
+    Eigen::VectorXd CalculatePredictedMeasurement(Eigen::MatrixXd Zsig);
+    Eigen::MatrixXd CalculateMeasurementSigmaPoints();
+    Eigen::MatrixXd CreateAugmentedMatrix();
+    void PropagateSigmaPoints(Eigen::MatrixXd Xsig_aug, double delta_t);
+    void CalculateWeights();
+    void SquashAngle(double& angle);
+
     /**
      * ProcessMeasurement
      * @param meas_package The latest measurement data of either radar or laser

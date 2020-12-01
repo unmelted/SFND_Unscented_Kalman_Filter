@@ -134,12 +134,126 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package) {
 
 }
 
+Eigen::MatrixXd UKF::CreateAugmentedMatrix()
+{
+  // create augmented mean vector
+  VectorXd x_aug = VectorXd(7);
+
+  // create augmented state covariance
+  MatrixXd P_aug = MatrixXd(7, 7);
+  // create augmented mean state
+  x_aug.head(5) = x_;
+  x_aug(5) = 0;
+  x_aug(6) = 0;
+
+  P_aug.fill(0.0);
+  P_aug.topLeftCorner(5, 5) = P_;
+  P_aug(5, 5) = std_a_ * std_a_;
+  P_aug(6, 6) = std_yawdd_ * std_yawdd_;
+
+  MatrixXd A = P_aug.llt().matrixL();
+  MatrixXd sig_matrix = A * std::sqrt((lambda_ + n_x_));
+  Eigen::MatrixXd Xsig_aug(n_aug_, 2 * n_aug_ + 1);
+
+  // create sigma point matrix
+  MatrixXd sigma_matrix = A * std::sqrt(lambda_ + n_aug_);
+  Xsig_aug.col(0) = x_aug;
+
+  for (int col_no = 0; col_no < n_aug_; ++col_no)
+  {
+    Xsig_aug.col(col_no + 1) = x_aug + sigma_matrix.col(col_no);
+    Xsig_aug.col(col_no + n_aug_ + 1) = x_aug - sigma_matrix.col(col_no);
+  }
+  return Xsig_aug;
+}
+
+void UKF::PredictMean()
+{
+    // Predict Mean
+    x_.fill(0.0);
+    for (int col_no = 0; col_no < Xsig_pred_.cols(); ++col_no)
+    {
+        x_ = x_ + (weights_(col_no) * Xsig_pred_.col(col_no));
+    }
+}
+
+void UKF::CalculateWeights()
+{
+    weights_ = VectorXd(2 * n_aug_ + 1);
+    double w_major = lambda_ / (lambda_ + n_aug_);
+    double w_minor = 0.5 / (lambda_ + n_aug_);
+
+    weights_.fill(w_minor);
+    weights_(0) = w_major;
+}
+void UKF::PredictCovariance()
+{
+    P_.fill(0.0);
+    for (int col_no = 0; col_no < Xsig_pred_.cols(); ++col_no)
+    {
+        VectorXd residual = Xsig_pred_.col(col_no) - x_;
+        SquashAngle(residual(3));
+        P_ = P_ + (weights_(col_no) * (residual * residual.transpose()));
+    }
+}
+
+void UKF::PropagateSigmaPoints(Eigen::MatrixXd Xsig_aug, double delta_t)
+{
+    for (int col_no = 0; col_no < Xsig_aug.cols(); ++col_no)
+    {
+        double p_x = Xsig_aug(0, col_no);
+        double p_y = Xsig_aug(1, col_no);
+        double v = Xsig_aug(2, col_no);
+        double psi = Xsig_aug(3, col_no);
+        double psi_dot = Xsig_aug(4, col_no);
+        double nu = Xsig_aug(5, col_no);
+        double nu_dot_dot = Xsig_aug(6, col_no);
+
+        double px_pred{ 0.0 };
+        double py_pred{ 0.0 };
+
+        if (fabs(psi_dot) < 0.001)
+        {
+            px_pred = p_x + v * std::cos(psi) * delta_t;
+            py_pred = p_y + v * std::sin(psi) * delta_t;
+        }
+        else
+        {
+            double factor = v / psi_dot;
+            double predicted_psi = psi + psi_dot * delta_t;
+            px_pred = p_x + factor * (std::sin(predicted_psi) - std::sin(psi));
+            py_pred = p_y + factor * (std::cos(psi) - cos(predicted_psi));
+        }
+        double v_pred = v;
+        double psi_pred = psi + psi * delta_t;
+        double psi_dot_pred = psi_dot;
+
+        px_pred += 0.5 * delta_t * delta_t * std::cos(psi) * nu;
+        py_pred += 0.5 * delta_t * delta_t * std::sin(psi) * nu;
+        v_pred += delta_t * nu;
+        psi_pred += 0.5 * delta_t * delta_t * nu_dot_dot;
+        psi_dot_pred += delta_t * nu_dot_dot;
+
+        Xsig_pred_(0, col_no) = px_pred;
+        Xsig_pred_(1, col_no) = py_pred;
+        Xsig_pred_(2, col_no) = v_pred;
+        Xsig_pred_(3, col_no) = psi_pred;
+        Xsig_pred_(4, col_no) = psi_dot_pred;
+    }
+}
+
 void UKF::Prediction(double delta_t) {
     /**
      * TODO: Complete this function! Estimate the object's location.
      * Modify the state vector, x_. Predict sigma points, the state,
      * and the state covariance matrix.
      */
+    Eigen::MatrixXd Xsig_aug = CreateAugmentedMatrix();
+    PropagateSigmaPoints(Xsig_aug, delta_t);
+    // Predict Mean and Covariance
+    PredictMean();
+    PredictCovariance();
+
 }
 
 void UKF::UpdateLidar(MeasurementPackage meas_package) {
