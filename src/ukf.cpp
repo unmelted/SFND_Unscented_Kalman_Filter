@@ -21,10 +21,10 @@ UKF::UKF() {
     P_ = MatrixXd(5, 5);
 
     // Process noise standard deviation longitudinal acceleration in m/s^2
-    std_a_ = 30;
+    std_a_ = 2;
 
     // Process noise standard deviation yaw acceleration in rad/s^2
-    std_yawdd_ = 30;
+    std_yawdd_ = 1;
 
     /**
      * DO NOT MODIFY measurement noise values below.
@@ -67,6 +67,17 @@ UKF::UKF() {
 }
 
 UKF::~UKF() {}
+void UKF::SquashAngle(double& angle)
+{
+  while (angle > M_PI)
+  {
+    angle -= 2. * M_PI;
+  }
+  while (angle < -M_PI)
+  {
+    angle += 2. * M_PI;
+  }
+}
 void UKF::InitializeLidarMatrices(MeasurementPackage measurement)
 {
     double x = measurement.raw_measurements_(0);
@@ -256,20 +267,154 @@ void UKF::Prediction(double delta_t) {
 
 }
 
-void UKF::UpdateLidar(MeasurementPackage meas_package) {
+void UKF::UpdateLidar(MeasurementPackage meas_package)
+{
     /**
      * TODO: Complete this function! Use lidar data to update the belief
      * about the object's position. Modify the state vector, x_, and
      * covariance, P_.
      * You can also calculate the lidar NIS, if desired.
      */
+    int n_z = 2;
+    VectorXd z = meas_package.raw_measurements_;
+    MatrixXd Zsig = MatrixXd(n_z, 2 * n_aug_ + 1);
+
+    VectorXd z_pred = VectorXd(n_z);
+
+    MatrixXd S = MatrixXd(n_z, n_z);
+
+    for (int col_no = 0; col_no < Xsig_pred_.cols(); ++col_no)
+    {
+        double px = Xsig_pred_(0, col_no);
+        double py = Xsig_pred_(1, col_no);
+
+        Zsig(0, col_no) = px;
+        Zsig(1, col_no) = py;
+    }
+
+    z_pred.fill(0.0);
+    for (int col_no = 0; col_no < Xsig_pred_.cols(); ++col_no)
+    {
+        z_pred = z_pred + weights_(col_no) * Zsig.col(col_no);
+    }
+
+    S.fill(0.0);
+    MatrixXd R(n_z, n_z);
+    R.fill(0.0);
+    R(0, 0) = std_laspx_ * std_laspx_;
+    R(1, 1) = std_laspy_ * std_laspy_;
+    for (int col_no = 0; col_no < Xsig_pred_.cols(); ++col_no)
+    {
+        VectorXd residual = Zsig.col(col_no) - z_pred;
+        S = S + weights_(col_no) * (residual * residual.transpose());
+    }
+    S = S + R;
+
+    MatrixXd Tc = MatrixXd(n_x_, n_z);
+
+    Tc.fill(0.0);
+    for (int col_no = 0; col_no < Zsig.cols(); ++col_no)
+    {
+        VectorXd state_residual = Xsig_pred_.col(col_no) - x_;
+        VectorXd measurement_residual = Zsig.col(col_no) - z_pred;
+        SquashAngle(state_residual(3));
+        Tc = Tc + weights_(col_no) * (state_residual * measurement_residual.transpose());
+    }
+
+    MatrixXd K = Tc * S.inverse();
+
+    VectorXd z_residual = z - z_pred;
+
+    x_ = x_ + K * (z_residual);
+    P_ = P_ - K * S * K.transpose();
 }
 
-void UKF::UpdateRadar(MeasurementPackage meas_package) {
+void UKF::UpdateRadar(MeasurementPackage meas_package)
+{
     /**
      * TODO: Complete this function! Use radar data to update the belief
      * about the object's position. Modify the state vector, x_, and
      * covariance, P_.
      * You can also calculate the radar NIS, if desired.
      */
+
+    int n_z = 3;
+    VectorXd z = meas_package.raw_measurements_;
+    MatrixXd Zsig = MatrixXd(n_z, 2 * n_aug_ + 1);
+    VectorXd z_pred = VectorXd(n_z);
+    MatrixXd S = MatrixXd(n_z, n_z);
+    MatrixXd R(n_z, n_z);
+
+    Zsig = CalculateMeasurementSigmaPoints();
+    z_pred = CalculatePredictedMeasurement(Zsig);
+
+    S.fill(0.0);
+    R.fill(0.0);
+    R(0, 0) = std_radr_ * std_radr_;
+    R(1, 1) = std_radphi_ * std_radphi_;
+    R(2, 2) = std_radrd_ * std_radrd_;
+
+    for (int col_no = 0; col_no < Xsig_pred_.cols(); ++col_no)
+    {
+        VectorXd residual = Zsig.col(col_no) - z_pred;
+        SquashAngle(residual(1));
+        S = S + weights_(col_no) * (residual * residual.transpose());
+    }
+    S = S + R;
+
+    MatrixXd Tc = MatrixXd(n_x_, n_z);
+
+    Tc.fill(0.0);
+    for (int col_no = 0; col_no < Zsig.cols(); ++col_no)
+    {
+        VectorXd state_residual = Xsig_pred_.col(col_no) - x_;
+        VectorXd measurement_residual = Zsig.col(col_no) - z_pred;
+        SquashAngle(state_residual(3));
+        SquashAngle(measurement_residual(1));
+        Tc = Tc + weights_(col_no) * (state_residual * measurement_residual.transpose());
+    }
+
+    MatrixXd K = Tc * S.inverse();
+
+    VectorXd z_residual = z - z_pred;
+
+    SquashAngle(z_residual(1));
+
+    x_ = x_ + K * (z_residual);
+    P_ = P_ - K * S * K.transpose();
+}
+
+Eigen::MatrixXd UKF::CalculateMeasurementSigmaPoints()
+{
+    int n_z = 3;
+    MatrixXd Zsig = MatrixXd(n_z, 2 * n_aug_ + 1);
+    Zsig.fill(0.0);
+    for (int col_no = 0; col_no < Xsig_pred_.cols(); ++col_no)
+    {
+        double px = Xsig_pred_(0, col_no);
+        double py = Xsig_pred_(1, col_no);
+        double v = Xsig_pred_(2, col_no);
+        double phi = Xsig_pred_(3, col_no);
+
+        double vx = std::cos(phi) * v;
+        double vy = std::sin(phi) * v;
+
+        Zsig(0, col_no) = std::sqrt(px * px + py * py);
+        Zsig(1, col_no) = std::atan2(py, px);
+        Zsig(2, col_no) = (px * vx + py * vy) / (std::sqrt(px * px + py * py));
+    }
+    return Zsig;
+}
+
+Eigen::VectorXd UKF::CalculatePredictedMeasurement(Eigen::MatrixXd Zsig)
+{
+    int n_z = 3;
+    VectorXd z_pred = VectorXd(n_z);
+
+    z_pred.fill(0.0);
+    for (int col_no = 0; col_no < Zsig.cols(); ++col_no)
+    {
+        z_pred = z_pred + weights_(col_no) * Zsig.col(col_no);
+    }
+    return z_pred;
 }

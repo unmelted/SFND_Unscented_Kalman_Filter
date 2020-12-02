@@ -16,7 +16,7 @@ class UKF {
    */
   virtual ~UKF();
 
-    void InitializeLidarMatrices(MeasurementPackage measurement)
+    void InitializeLidarMatrices(MeasurementPackage measurement);
     void InitializeRadarMatrices(MeasurementPackage measurement);
     void PredictMean();
     void PredictCovariance();
